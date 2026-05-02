@@ -89,6 +89,14 @@ HOTELS = [
     },
 ]
 
+# --- Room Filtering (from old scraper) ---
+DOUBLE_KW = ['double', 'twin', 'queen', 'king', 'standard', 'superior', 'classic', 'deluxe']
+EXCLUDE_KW = ['triple', 'family', 'suite', 'single', 'quadruple']
+
+# Max competitor failures before aborting and alerting
+MAX_COMP_FAILURES = 2 
+RETRIES_PER_HOTEL = 2
+
 USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
@@ -113,7 +121,7 @@ def build_booking_url(base_url: str, checkin: datetime) -> str:
 
 
 async def scrape_price(page, hotel: dict, checkin: datetime) -> dict:
-    """Scrape price and return a status dict."""
+    """Scrape price and return a status dict with room name."""
     url = build_booking_url(hotel["booking_url"], checkin)
     
     try:
@@ -126,7 +134,7 @@ async def scrape_price(page, hotel: dict, checkin: datetime) -> dict:
                 timeout=15000
             )
         except PlaywrightTimeout:
-            return {"price": None, "status": "TIMEOUT"}
+            return {"price": None, "status": "TIMEOUT", "room": None}
 
         # Check for Sold Out or Minimum Stay messages
         avail_msg_selectors = [
@@ -141,39 +149,59 @@ async def scrape_price(page, hotel: dict, checkin: datetime) -> dict:
             if el:
                 text = (await el.inner_text()).lower()
                 if "no availability" in text or "sold out" in text or "not available" in text:
-                    return {"price": None, "status": "SOLD_OUT"}
+                    return {"price": None, "status": "SOLD_OUT", "room": "Sold out"}
                 if "minimum stay" in text or "stay" in text and "nights" in text:
-                    return {"price": None, "status": "MIN_STAY"}
+                    return {"price": None, "status": "MIN_STAY", "room": "Min stay required"}
 
-        # Try multiple selectors Booking.com uses for prices
-        price_selectors = [
-            '[data-testid="price-and-discounted-price"]',
-            '.prco-valign-middle-helper',
-            '[data-testid="recommended-units"] .bui-price-display__value',
-            '.hprt-price-policy .bui-price-display__value',
-        ]
-
-        prices = []
-        for selector in price_selectors:
-            elements = await page.query_selector_all(selector)
-            for el in elements:
-                text = await el.inner_text()
-                clean = text.replace("€", "").replace(",", "").replace("\xa0", "").replace(" ", "").strip()
-                try:
-                    val = float(clean)
-                    if 10 < val < 10000:
-                        prices.append(val)
-                except ValueError:
-                    pass
-
-        if prices:
-            return {"price": min(prices), "status": "SUCCESS"}
+        # Find all room/price combinations
+        # We try both the classic table and the modern grid layout
+        all_rooms = []
         
-        return {"price": None, "status": "NO_PRICE_FOUND"}
+        # Modern Layout
+        blocks = await page.query_selector_all('[data-testid="recommended-units"], .hprt-table tr:not(.hprt-cheapest-block-row)')
+        for block in blocks:
+            # Try to find room name and price within the same block
+            room_el = await block.query_selector('[data-testid="room-name"], .hprt-roomtype-icon-link')
+            price_el = await block.query_selector('[data-testid="price-and-discounted-price"], .bui-price-display__value, .prco-valign-middle-helper')
+            
+            if room_el and price_el:
+                room_text = (await room_el.inner_text()).strip()
+                price_text = (await price_el.inner_text()).strip()
+                
+                # Extract numeric value
+                clean = price_text.replace("€", "").replace(",", "").replace("\xa0", "").replace(" ", "").strip()
+                nums = re.findall(r'\d+', clean)
+                if nums:
+                    val = float(nums[-1])
+                    if 10 < val < 10000:
+                        all_rooms.append({"room": room_text, "price": val})
+
+        if not all_rooms:
+            # Fallback to simple price search if grouping failed
+            price_elements = await page.query_selector_all('[data-testid="price-and-discounted-price"], .prco-valign-middle-helper')
+            if price_elements:
+                text = await price_elements[0].inner_text()
+                nums = re.findall(r'\d+', text.replace("€", "").replace(",", "").replace(" ", ""))
+                if nums:
+                    return {"price": float(nums[-1]), "status": "SUCCESS", "room": "Standard Room"}
+            return {"price": None, "status": "NO_PRICE_FOUND", "room": None}
+
+        # Filter for doubles (logic from old scraper)
+        doubles = [r for r in all_rooms
+                   if any(k in r['room'].lower() for k in DOUBLE_KW)
+                   and not any(k in r['room'].lower() for k in EXCLUDE_KW)]
+
+        if doubles:
+            cheapest = min(doubles, key=lambda x: x['price'])
+            return {"price": cheapest["price"], "status": "SUCCESS", "room": cheapest["room"]}
+        else:
+            # Fallback to absolute cheapest if no specific "double" room keywords found
+            cheapest = min(all_rooms, key=lambda x: x['price'])
+            return {"price": cheapest["price"], "status": "SUCCESS", "room": cheapest["room"]}
 
     except Exception as e:
         print(f"  [!] Error scraping {hotel['name']}: {e}")
-        return {"price": None, "status": "ERROR"}
+        return {"price": None, "status": "ERROR", "room": None}
 
 
 async def scrape_all_hotels(checkin: datetime) -> list[dict]:
@@ -190,21 +218,34 @@ async def scrape_all_hotels(checkin: datetime) -> list[dict]:
         for hotel in HOTELS:
             print(f"  Scraping: {hotel['name']}...")
             
-            context = await browser.new_context(
-                user_agent=random.choice(USER_AGENTS),
-                viewport={"width": 1366, "height": 768},
-                locale="en-GB",
-                timezone_id="Europe/Madrid",
-            )
+            scraping_result = {"price": None, "status": "FAILED", "room": None}
             
-            # Mask automation fingerprints
-            await context.add_init_script("""
-                Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-            """)
-            
-            page = await context.new_page()
-            scraping_result = await scrape_price(page, hotel, checkin)
-            await context.close()
+            for attempt in range(RETRIES_PER_HOTEL):
+                if attempt > 0:
+                    print(f"    [retry] Attempt {attempt + 1} for {hotel['name']}...")
+
+                context = await browser.new_context(
+                    user_agent=random.choice(USER_AGENTS),
+                    viewport={"width": 1366, "height": 768},
+                    locale="en-GB",
+                    timezone_id="Europe/Madrid",
+                )
+                
+                # Mask automation fingerprints
+                await context.add_init_script("""
+                    Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+                """)
+                
+                page = await context.new_page()
+                scraping_result = await scrape_price(page, hotel, checkin)
+                await context.close()
+
+                # If successful or a valid business status (sold out/min stay), stop retrying
+                if scraping_result["status"] in ["SUCCESS", "SOLD_OUT", "MIN_STAY"]:
+                    break
+                
+                # If we failed, wait a bit before retrying
+                await asyncio.sleep(random.uniform(2, 4))
             
             results.append({
                 "hotel_id": hotel["id"],
@@ -212,6 +253,7 @@ async def scrape_all_hotels(checkin: datetime) -> list[dict]:
                 "is_mine": hotel["is_mine"],
                 "price": scraping_result["price"],
                 "status": scraping_result["status"],
+                "room_name": scraping_result["room"],
                 "scraped_at": datetime.now(timezone.utc).isoformat(),
                 "checkin_date": checkin.strftime("%Y-%m-%d"),
                 "run_mode": RUN_MODE,
@@ -233,6 +275,19 @@ def save_results(results: list[dict]) -> None:
         if row["price"] is not None:
             supabase.table("price_snapshots").insert(row).execute()
     print(f"  Saved {sum(1 for r in results if r['price'] is not None)} prices to Supabase")
+
+# ─── Reliability (from old scraper) ───────────────────────────────────────────
+
+def confidence_check(results: list[dict]) -> tuple[bool, str]:
+    """Check if the scrape results are reliable."""
+    competitors = [r for r in results if not r["is_mine"]]
+    # Only count technical errors as failures, not "Sold Out" or "Min Stay"
+    failures = [r for r in competitors if r["status"] in ["ERROR", "TIMEOUT", "FAILED"]]
+    
+    if len(failures) > MAX_COMP_FAILURES:
+        return False, f"{len(failures)} competitor hotels had scraping errors"
+    return True, "ok"
+
 
 # ─── Email building ───────────────────────────────────────────────────────────
 
@@ -287,9 +342,14 @@ def build_html_email(results: list[dict], checkin: datetime) -> str:
         bg = "#fef9e7" if r["is_mine"] else "#ffffff"
         border = "2px solid #f39c12" if r["is_mine"] else "1px solid #eee"
         mine_label = ' <span style="font-size:10px;background:#f39c12;color:#fff;padding:1px 5px;border-radius:4px;vertical-align:middle">MINE</span>' if r["is_mine"] else ""
+        room_label = f'<div style="font-size:11px;color:#888;margin-top:2px">{r["room_name"]}</div>' if r.get("room_name") else ""
+        
         rows += f"""
         <tr style="background:{bg};border-left:{border}">
-          <td style="padding:10px 14px">{r['name']}{mine_label}{badge_html(r['price'], r['is_mine'])}</td>
+          <td style="padding:10px 14px">
+            <div style="font-weight:500">{r['name']}{mine_label}{badge_html(r['price'], r['is_mine'])}</div>
+            {room_label}
+          </td>
           {price_cell(r)}
         </tr>"""
 
@@ -400,6 +460,14 @@ async def main():
 
     print("\nSaving to Supabase...")
     save_results(results)
+
+    # Confidence check (from old scraper)
+    ok, reason = confidence_check(results)
+    if not ok:
+        print(f"\n❌ CONFIDENCE CHECK FAILED: {reason}")
+        print("   Skipping report and sending alert to Josh.")
+        send_error_alert(results, checkin)
+        return
 
     print("Sending email...")
     if len(successes) > 0:
