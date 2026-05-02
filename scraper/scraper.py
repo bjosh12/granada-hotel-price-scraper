@@ -456,7 +456,8 @@ def build_html_email(results: list[dict], checkin: datetime) -> str:
 def build_error_email(results: list[dict], checkin: datetime) -> str:
     """Build a plain error alert email."""
     failures = [r["name"] for r in results if r["price"] is None]
-    timestamp = datetime.now().strftime("%d %b %Y, %H:%M")
+    MADRID_TZ = timezone(timedelta(hours=2))
+    timestamp = datetime.now(MADRID_TZ).strftime("%d %b %Y, %H:%M")
     items = "".join(f"<li>{f}</li>" for f in failures)
     return f"""<p>⚠️ <strong>{len(failures)} scrapes failed</strong> at {timestamp} UTC for check-in {checkin.strftime('%Y-%m-%d')}.</p>
 <ul>{items}</ul>

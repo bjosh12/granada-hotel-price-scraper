@@ -2,15 +2,21 @@ name: Hotel Price Scraper
 
 on:
   schedule:
-    # Daily runs: 8AM, 12PM, 4PM, 8PM Madrid time (UTC+2 in summer / UTC+1 in winter)
-    # These are UTC times — adjust by -1hr in winter (CET) or -2hrs in summer (CEST)
-    - cron: "0 6 * * *"    # 8AM CEST (summer)
+    # ── SUMMER (CEST, UTC+2): last Sunday of March → last Sunday of October ──
+    # Currently active. To switch to winter, comment these out and uncomment CET below.
+    - cron: "0 6 * * *"    # 8AM CEST
     - cron: "0 10 * * *"   # 12PM CEST
     - cron: "0 14 * * *"   # 4PM CEST
     - cron: "0 18 * * *"   # 8PM CEST
+    - cron: "0 5 * * 0"    # Sunday 7AM CEST — weekly preview
 
-    # Weekly preview: every Sunday at 7AM CEST (preview next weekend's prices)
-    - cron: "0 5 * * 0"
+    # ── WINTER (CET, UTC+1): last Sunday of October → last Sunday of March ──
+    # To activate: comment out the CEST block above and uncomment these.
+    # - cron: "0 7 * * *"    # 8AM CET
+    # - cron: "0 11 * * *"   # 12PM CET
+    # - cron: "0 15 * * *"   # 4PM CET
+    # - cron: "0 19 * * *"   # 8PM CET
+    # - cron: "0 6 * * 0"    # Sunday 7AM CET — weekly preview
 
   # Allow manual trigger from GitHub Actions UI (useful for testing)
   workflow_dispatch:
