@@ -109,7 +109,7 @@ USER_AGENTS = [
 
 # --- Webshare API Support ---
 def get_webshare_proxy():
-    """Fetch the backbone proxy URL using the Webshare API key."""
+    """Fetch a specific proxy from the Webshare proxy list."""
     api_key = os.environ.get("WEBSHARE_API_KEY")
     if not api_key:
         return os.environ.get("PROXY_URL")
@@ -117,18 +117,23 @@ def get_webshare_proxy():
     try:
         import urllib.request
         import json
+        # Fetch the first proxy from your list
         req = urllib.request.Request(
-            "https://proxy.webshare.io/api/v2/proxy/config/",
+            "https://proxy.webshare.io/api/v2/proxy/list/?page=1&page_size=1",
             headers={"Authorization": f"Token {api_key}"}
         )
         with urllib.request.urlopen(req, timeout=10) as response:
-            config = json.loads(response.read().decode())
-            user = config["username"]
-            pw = config["password"]
-            # Backbone proxy is usually p.webshare.io:80
-            return f"http://{user}:{pw}@p.webshare.io:80"
+            data = json.loads(response.read().decode())
+            if data["results"]:
+                proxy = data["results"][0]
+                user = proxy["username"]
+                pw = proxy["password"]
+                addr = proxy["proxy_address"]
+                port = proxy["port"]
+                return f"http://{user}:{pw}@{addr}:{port}"
+            return os.environ.get("PROXY_URL")
     except Exception as e:
-        print(f"  [!] Failed to fetch Webshare config: {e}")
+        print(f"  [!] Failed to fetch Webshare proxy list: {e}")
         return os.environ.get("PROXY_URL")
 
 
