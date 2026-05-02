@@ -398,12 +398,12 @@ def build_html_email(results: list[dict], checkin: datetime) -> str:
           {price_cell(r)}
         </tr>"""
 
-    failures = [r["name"] for r in results if r["price"] is None]
+    scrape_errors = [r["name"] for r in results if r["status"] in ("ERROR", "TIMEOUT", "FAILED", "NO_PRICE_FOUND")]
     failure_section = ""
-    if failures:
+    if scrape_errors:
         failure_section = f"""
         <p style="color:#c0392b;font-size:13px;margin-top:16px">
-          ⚠️ Could not scrape: {", ".join(failures)}
+          ⚠️ Scrape errors (check logs): {", ".join(scrape_errors)}
         </p>"""
 
     median_row = f"<p style='color:#666;font-size:13px'>Competitor median: <strong>€{median_price:.0f}</strong></p>" if median_price else ""
