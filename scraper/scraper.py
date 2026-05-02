@@ -107,6 +107,31 @@ USER_AGENTS = [
 
 # ─── Scraping ─────────────────────────────────────────────────────────────────
 
+# --- Webshare API Support ---
+def get_webshare_proxy():
+    """Fetch the backbone proxy URL using the Webshare API key."""
+    api_key = os.environ.get("WEBSHARE_API_KEY")
+    if not api_key:
+        return os.environ.get("PROXY_URL")
+    
+    try:
+        import urllib.request
+        import json
+        req = urllib.request.Request(
+            "https://proxy.webshare.io/api/v2/proxy/config/",
+            headers={"Authorization": f"Token {api_key}"}
+        )
+        with urllib.request.urlopen(req, timeout=10) as response:
+            config = json.loads(response.read().decode())
+            user = config["username"]
+            pw = config["password"]
+            # Backbone proxy is usually p.webshare.io:80
+            return f"http://{user}:{pw}@p.webshare.io:80"
+    except Exception as e:
+        print(f"  [!] Failed to fetch Webshare config: {e}")
+        return os.environ.get("PROXY_URL")
+
+
 def build_booking_url(base_url: str, checkin: datetime) -> str:
     """Append date + room params to a Booking.com hotel URL."""
     checkout = checkin + timedelta(days=1)
@@ -125,13 +150,13 @@ async def scrape_price(page, hotel: dict, checkin: datetime) -> dict:
     url = build_booking_url(hotel["booking_url"], checkin)
     
     try:
-        await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+        await page.goto(url, wait_until="domcontentloaded", timeout=20000)
         
         # Wait for price OR availability messages
         try:
             await page.wait_for_selector(
                 '[data-testid="price-and-discounted-price"], .prco-valign-middle-helper, [data-testid="availability-messages-container"], .hp_no_availability_msg, .availability-advisory', 
-                timeout=15000
+                timeout=12000
             )
         except PlaywrightTimeout:
             return {"price": None, "status": "TIMEOUT", "room": None}
@@ -209,7 +234,10 @@ async def scrape_all_hotels(checkin: datetime) -> list[dict]:
     results = []
     
     async with async_playwright() as p:
-        proxy_url = os.environ.get("PROXY_URL")
+        proxy_url = get_webshare_proxy()
+        if proxy_url:
+            print(f"  [Proxy] Using proxy configuration (source: {'WEBSHARE_API' if os.environ.get('WEBSHARE_API_KEY') else 'PROXY_URL'})")
+        
         browser = await p.chromium.launch(
             headless=True,
             proxy={"server": proxy_url} if proxy_url else None
