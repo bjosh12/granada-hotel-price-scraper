@@ -71,6 +71,8 @@ jobs:
           RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
           FROM_EMAIL: ${{ secrets.FROM_EMAIL }}
           EMAIL_1: ${{ secrets.EMAIL_1 }}
+          EMAIL_2: ${{ secrets.EMAIL_2 }}
+          EMAIL_3: ${{ secrets.EMAIL_3 }}
           ALERT_EMAIL: ${{ secrets.ALERT_EMAIL }}
           RUN_MODE: ${{ steps.mode.outputs.mode }}
           PROXY_URL: ${{ secrets.PROXY_URL }}

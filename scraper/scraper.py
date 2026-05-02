@@ -25,9 +25,11 @@ SUPABASE_KEY = os.environ["SUPABASE_KEY"]
 RESEND_API_KEY = os.environ["RESEND_API_KEY"]
 FROM_EMAIL = os.environ.get("FROM_EMAIL", "prices@yourdomain.com")
 
-REPORT_RECIPIENTS = [
-    os.environ["EMAIL_1"],
-]
+REPORT_RECIPIENTS = [e for e in [
+    os.environ.get("EMAIL_1"),
+    os.environ.get("EMAIL_2"),
+    os.environ.get("EMAIL_3"),
+] if e]
 ALERT_RECIPIENT = os.environ["ALERT_EMAIL"]  # You only, for error alerts
 
 # Number of failures before sending an error alert
