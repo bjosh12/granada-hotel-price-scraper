@@ -8,7 +8,7 @@ import os
 import json
 import asyncio
 import statistics
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 import random
 import time
@@ -196,7 +196,7 @@ async def scrape_all_hotels(checkin: datetime) -> list[dict]:
                 "name": hotel["name"],
                 "is_mine": hotel["is_mine"],
                 "price": price,
-                "scraped_at": datetime.utcnow().isoformat(),
+                "scraped_at": datetime.now(timezone.utc).isoformat(),
                 "checkin_date": checkin.strftime("%Y-%m-%d"),
                 "run_mode": RUN_MODE,
             })

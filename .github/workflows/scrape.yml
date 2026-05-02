@@ -67,6 +67,7 @@ jobs:
           EMAIL_1: ${{ secrets.EMAIL_1 }}
           ALERT_EMAIL: ${{ secrets.ALERT_EMAIL }}
           RUN_MODE: ${{ steps.mode.outputs.mode }}
+          PROXY_URL: ${{ secrets.PROXY_URL }}
         run: python scraper/scraper.py
 
       - name: Upload logs on failure
