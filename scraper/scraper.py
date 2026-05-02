@@ -5,6 +5,7 @@ stores results in Supabase, and sends formatted HTML email reports.
 """
 
 import os
+import re
 import json
 import asyncio
 import statistics
@@ -121,7 +122,7 @@ def get_webshare_proxy():
         import random
         # Fetch up to 50 proxies from your list
         req = urllib.request.Request(
-            "https://proxy.webshare.io/api/v2/proxy/list/?page=1&page_size=50",
+            "https://proxy.webshare.io/api/v2/proxy/list/?mode=direct&page=1&page_size=50",
             headers={"Authorization": f"Token {api_key}"}
         )
         with urllib.request.urlopen(req, timeout=10) as response:
@@ -256,19 +257,6 @@ async def scrape_all_hotels(checkin: datetime) -> list[dict]:
             proxy={"server": proxy_url} if proxy_url else None
         )
 
-        # --- Proxy Check (Debug) ---
-        test_context = await browser.new_context()
-        test_page = await test_context.new_page()
-        try:
-            await test_page.goto("https://api.ipify.org?format=json", timeout=10000)
-            ip_data = await test_page.inner_text("body")
-            print(f"  [Proxy Check] Outgoing IP: {ip_data}")
-        except Exception as e:
-            print(f"  [Proxy Check] Could not verify IP: {e}")
-        finally:
-            await test_context.close()
-        # ---------------------------
-        
         for hotel in HOTELS:
             print(f"  Scraping: {hotel['name']}...")
             
@@ -325,9 +313,10 @@ async def scrape_all_hotels(checkin: datetime) -> list[dict]:
 def save_results(results: list[dict]) -> None:
     """Save scraped prices to Supabase."""
     supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+    schema_keys = {"hotel_id", "name", "is_mine", "price", "scraped_at", "checkin_date", "run_mode"}
     for row in results:
         if row["price"] is not None:
-            supabase.table("price_snapshots").insert(row).execute()
+            supabase.table("price_snapshots").insert({k: v for k, v in row.items() if k in schema_keys}).execute()
     print(f"  Saved {sum(1 for r in results if r['price'] is not None)} prices to Supabase")
 
 # ─── Reliability (from old scraper) ───────────────────────────────────────────
