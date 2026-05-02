@@ -337,76 +337,86 @@ def confidence_check(results: list[dict]) -> tuple[bool, str]:
 # ─── Email building ───────────────────────────────────────────────────────────
 
 def compute_median_badge(my_price: Optional[float], competitor_prices: list[float]) -> str:
-    """Return a vs-median badge string like '+12%' or '-8%'."""
+    """Return a vs-median badge string like '+€12 vs median'."""
     if my_price is None or not competitor_prices:
         return ""
     median = statistics.median(competitor_prices)
     if median == 0:
         return ""
-    diff_pct = ((my_price - median) / median) * 100
-    sign = "+" if diff_pct >= 0 else ""
-    return f"{sign}{diff_pct:.0f}% vs median"
+    diff = my_price - median
+    sign = "+" if diff >= 0 else "-"
+    return f"{sign}€{abs(diff):.0f} vs median"
 
 
 def build_html_email(results: list[dict], checkin: datetime) -> str:
     """Build the full HTML email report."""
-    timestamp = datetime.now().strftime("%d %b %Y, %H:%M")
+    MADRID_TZ = timezone(timedelta(hours=2))
+    timestamp = datetime.now(MADRID_TZ).strftime("%d %b %Y, %H:%M")
     checkin_str = checkin.strftime("%A %d %B %Y")
-    
+
     my_results = [r for r in results if r["is_mine"]]
     competitor_results = [r for r in results if not r["is_mine"]]
     competitor_prices = [r["price"] for r in competitor_results if r["price"] is not None]
     median_price = statistics.median(competitor_prices) if competitor_prices else None
+    min_price = min(competitor_prices) if competitor_prices else None
+    max_price = max(competitor_prices) if competitor_prices else None
 
-    # Build rows HTML
     def price_cell(row):
         if row["price"] is not None:
-            return f'<td style="font-weight:600">€{row["price"]:.0f}</td>'
-        
+            return f'<td style="padding:10px 14px;font-weight:600;font-size:15px">€{row["price"]:.0f}</td>'
         status_colors = {
             "SOLD_OUT": "#c0392b",
             "MIN_STAY": "#2980b9",
             "TIMEOUT": "#7f8c8d",
-            "NO_PRICE_FOUND": "#7f8c8d"
+            "NO_PRICE_FOUND": "#7f8c8d",
         }
         color = status_colors.get(row["status"], "#999")
         label = row["status"].replace("_", " ") if row["status"] else "N/A"
-        return f'<td style="color:{color};font-size:11px;font-weight:600;text-transform:uppercase">{label}</td>'
+        return f'<td style="padding:10px 14px;color:{color};font-size:11px;font-weight:600;text-transform:uppercase">{label}</td>'
 
-    def badge_html(price, is_mine):
-        if not is_mine or price is None or not competitor_prices:
+    def badge_html(price):
+        if price is None or not competitor_prices:
             return ""
         median = statistics.median(competitor_prices)
-        diff_pct = ((price - median) / median) * 100
-        color = "#c0392b" if diff_pct > 5 else "#27ae60" if diff_pct < -5 else "#e67e22"
+        diff = price - median
+        color = "#c0392b" if diff > 5 else "#27ae60" if diff < -5 else "#e67e22"
         label = compute_median_badge(price, competitor_prices)
-        return f'<span style="background:{color};color:#fff;font-size:11px;padding:2px 7px;border-radius:10px;margin-left:8px;font-weight:600">{label}</span>'
+        return f'<span style="background:{color};color:#fff;font-size:11px;padding:2px 8px;border-radius:10px;margin-left:8px;font-weight:600">{label}</span>'
 
-    rows = ""
-    for r in sorted(results, key=lambda x: (not x["is_mine"], x["price"] or 9999)):
-        bg = "#fef9e7" if r["is_mine"] else "#ffffff"
-        border = "2px solid #f39c12" if r["is_mine"] else "1px solid #eee"
-        mine_label = ' <span style="font-size:10px;background:#f39c12;color:#fff;padding:1px 5px;border-radius:4px;vertical-align:middle">MINE</span>' if r["is_mine"] else ""
-        room_label = f'<div style="font-size:11px;color:#888;margin-top:2px">{r["room_name"]}</div>' if r.get("room_name") else ""
-        
-        rows += f"""
-        <tr style="background:{bg};border-left:{border}">
+    def build_section(hotel_list):
+        html = ""
+        for r in sorted(hotel_list, key=lambda x: x["price"] or 9999):
+            room_label = f'<div style="font-size:11px;color:#888;margin-top:2px">{r["room_name"]}</div>' if r.get("room_name") else ""
+            vs = badge_html(r["price"]) if r["is_mine"] else ""
+            html += f"""
+        <tr style="border-bottom:1px solid #f0f0f0">
           <td style="padding:10px 14px">
-            <div style="font-weight:500">{r['name']}{mine_label}{badge_html(r['price'], r['is_mine'])}</div>
+            <div style="font-weight:500">{r['name']}{vs}</div>
             {room_label}
           </td>
           {price_cell(r)}
         </tr>"""
+        return html
+
+    my_rows = build_section(my_results)
+    comp_rows = build_section(competitor_results)
 
     scrape_errors = [r["name"] for r in results if r["status"] in ("ERROR", "TIMEOUT", "FAILED", "NO_PRICE_FOUND")]
     failure_section = ""
     if scrape_errors:
         failure_section = f"""
-        <p style="color:#c0392b;font-size:13px;margin-top:16px">
-          ⚠️ Scrape errors (check logs): {", ".join(scrape_errors)}
-        </p>"""
+      <p style="color:#c0392b;font-size:12px;margin:12px 24px 0">
+        ⚠️ Scrape errors (check logs): {", ".join(scrape_errors)}
+      </p>"""
 
-    median_row = f"<p style='color:#666;font-size:13px'>Competitor median: <strong>€{median_price:.0f}</strong></p>" if median_price else ""
+    if median_price is not None:
+        range_str = f"€{min_price:.0f} – €{max_price:.0f}" if min_price != max_price else f"€{median_price:.0f}"
+        market_row = f"""
+      <div style="padding:12px 24px;background:#f8f9fa;border-top:1px solid #eee;font-size:12px;color:#666">
+        Competitor range: <strong>{range_str}</strong> &nbsp;·&nbsp; Median: <strong>€{median_price:.0f}</strong>
+      </div>"""
+    else:
+        market_row = ""
 
     mode_label = "Weekly Preview" if RUN_MODE == "weekly" else "Daily Report"
 
@@ -415,30 +425,28 @@ def build_html_email(results: list[dict], checkin: datetime) -> str:
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
 <body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f4f6f9;margin:0;padding:20px">
   <div style="max-width:560px;margin:0 auto;background:#fff;border-radius:10px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.08)">
-    
+
     <div style="background:#2c3e50;padding:20px 24px;color:#fff">
       <div style="font-size:11px;letter-spacing:1px;text-transform:uppercase;opacity:0.6">Granada Hotels · {mode_label}</div>
       <div style="font-size:20px;font-weight:600;margin-top:4px">Price Report</div>
       <div style="font-size:13px;opacity:0.75;margin-top:4px">Check-in: {checkin_str}</div>
     </div>
 
-    <div style="padding:20px 24px">
-      <table style="width:100%;border-collapse:collapse;font-size:14px">
-        <thead>
-          <tr style="border-bottom:2px solid #ecf0f1">
-            <th style="text-align:left;padding:8px 14px;color:#666;font-weight:500">Hotel</th>
-            <th style="text-align:left;padding:8px 14px;color:#666;font-weight:500">Cheapest double</th>
-          </tr>
-        </thead>
-        <tbody>{rows}</tbody>
-      </table>
-      
-      {median_row}
-      {failure_section}
-    </div>
+    <div style="padding:8px 24px 4px;font-size:10px;color:#aaa;text-transform:uppercase;letter-spacing:0.8px">Your Properties</div>
+    <table style="width:100%;border-collapse:collapse;font-size:14px;background:#fef9e7">
+      <tbody>{my_rows}</tbody>
+    </table>
 
-    <div style="background:#f8f9fa;padding:12px 24px;font-size:12px;color:#aaa;border-top:1px solid #eee">
-      Generated at {timestamp} UTC · Hotel Price Monitor
+    <div style="padding:12px 24px 4px;font-size:10px;color:#aaa;text-transform:uppercase;letter-spacing:0.8px;border-top:2px solid #ecf0f1;margin-top:4px">Competitors</div>
+    <table style="width:100%;border-collapse:collapse;font-size:14px">
+      <tbody>{comp_rows}</tbody>
+    </table>
+
+    {market_row}
+    {failure_section}
+
+    <div style="padding:12px 24px;font-size:11px;color:#bbb;border-top:1px solid #eee;margin-top:4px">
+      Generated at {timestamp} (Madrid) · Hotel Price Monitor
     </div>
   </div>
 </body>
