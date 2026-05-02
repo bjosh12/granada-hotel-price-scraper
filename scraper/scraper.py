@@ -112,18 +112,38 @@ def build_booking_url(base_url: str, checkin: datetime) -> str:
     )
 
 
-async def scrape_price(page, hotel: dict, checkin: datetime) -> Optional[float]:
-    """Scrape the cheapest double room price from a Booking.com hotel page."""
+async def scrape_price(page, hotel: dict, checkin: datetime) -> dict:
+    """Scrape price and return a status dict."""
     url = build_booking_url(hotel["booking_url"], checkin)
     
     try:
         await page.goto(url, wait_until="domcontentloaded", timeout=30000)
         
-        # Wait for price elements to load
-        await page.wait_for_selector('[data-testid="price-and-discounted-price"], .prco-valign-middle-helper', timeout=15000)
+        # Wait for price OR availability messages
+        try:
+            await page.wait_for_selector(
+                '[data-testid="price-and-discounted-price"], .prco-valign-middle-helper, [data-testid="availability-messages-container"], .hp_no_availability_msg, .availability-advisory', 
+                timeout=15000
+            )
+        except PlaywrightTimeout:
+            return {"price": None, "status": "TIMEOUT"}
+
+        # Check for Sold Out or Minimum Stay messages
+        avail_msg_selectors = [
+            '[data-testid="availability-messages-container"]',
+            '.hp_no_availability_msg',
+            '.availability-advisory',
+            '.bui-alert--error'
+        ]
         
-        # Small random delay to look more human
-        await asyncio.sleep(random.uniform(1.5, 3.0))
+        for selector in avail_msg_selectors:
+            el = await page.query_selector(selector)
+            if el:
+                text = (await el.inner_text()).lower()
+                if "no availability" in text or "sold out" in text or "not available" in text:
+                    return {"price": None, "status": "SOLD_OUT"}
+                if "minimum stay" in text or "stay" in text and "nights" in text:
+                    return {"price": None, "status": "MIN_STAY"}
 
         # Try multiple selectors Booking.com uses for prices
         price_selectors = [
@@ -138,27 +158,22 @@ async def scrape_price(page, hotel: dict, checkin: datetime) -> Optional[float]:
             elements = await page.query_selector_all(selector)
             for el in elements:
                 text = await el.inner_text()
-                # Extract numeric value from strings like "€ 89" or "89 €"
                 clean = text.replace("€", "").replace(",", "").replace("\xa0", "").replace(" ", "").strip()
                 try:
                     val = float(clean)
-                    if 10 < val < 10000:  # sanity check
+                    if 10 < val < 10000:
                         prices.append(val)
                 except ValueError:
                     pass
 
         if prices:
-            return min(prices)
+            return {"price": min(prices), "status": "SUCCESS"}
         
-        print(f"  [!] No price found for {hotel['name']} — page may have changed structure")
-        return None
+        return {"price": None, "status": "NO_PRICE_FOUND"}
 
-    except PlaywrightTimeout:
-        print(f"  [!] Timeout scraping {hotel['name']}")
-        return None
     except Exception as e:
         print(f"  [!] Error scraping {hotel['name']}: {e}")
-        return None
+        return {"price": None, "status": "ERROR"}
 
 
 async def scrape_all_hotels(checkin: datetime) -> list[dict]:
@@ -188,14 +203,15 @@ async def scrape_all_hotels(checkin: datetime) -> list[dict]:
             """)
             
             page = await context.new_page()
-            price = await scrape_price(page, hotel, checkin)
+            scraping_result = await scrape_price(page, hotel, checkin)
             await context.close()
             
             results.append({
                 "hotel_id": hotel["id"],
                 "name": hotel["name"],
                 "is_mine": hotel["is_mine"],
-                "price": price,
+                "price": scraping_result["price"],
+                "status": scraping_result["status"],
                 "scraped_at": datetime.now(timezone.utc).isoformat(),
                 "checkin_date": checkin.strftime("%Y-%m-%d"),
                 "run_mode": RUN_MODE,
@@ -243,10 +259,19 @@ def build_html_email(results: list[dict], checkin: datetime) -> str:
     median_price = statistics.median(competitor_prices) if competitor_prices else None
 
     # Build rows HTML
-    def price_cell(price):
-        if price is None:
-            return '<td style="color:#999;font-style:italic">N/A</td>'
-        return f'<td style="font-weight:600">€{price:.0f}</td>'
+    def price_cell(row):
+        if row["price"] is not None:
+            return f'<td style="font-weight:600">€{row["price"]:.0f}</td>'
+        
+        status_colors = {
+            "SOLD_OUT": "#c0392b",
+            "MIN_STAY": "#2980b9",
+            "TIMEOUT": "#7f8c8d",
+            "NO_PRICE_FOUND": "#7f8c8d"
+        }
+        color = status_colors.get(row["status"], "#999")
+        label = row["status"].replace("_", " ") if row["status"] else "N/A"
+        return f'<td style="color:{color};font-size:11px;font-weight:600;text-transform:uppercase">{label}</td>'
 
     def badge_html(price, is_mine):
         if not is_mine or price is None or not competitor_prices:
@@ -265,7 +290,7 @@ def build_html_email(results: list[dict], checkin: datetime) -> str:
         rows += f"""
         <tr style="background:{bg};border-left:{border}">
           <td style="padding:10px 14px">{r['name']}{mine_label}{badge_html(r['price'], r['is_mine'])}</td>
-          {price_cell(r['price'])}
+          {price_cell(r)}
         </tr>"""
 
     failures = [r["name"] for r in results if r["price"] is None]
@@ -369,9 +394,9 @@ async def main():
 
     print(f"\nResults: {len(successes)} succeeded, {len(failures)} failed")
     for r in results:
-        status = f"€{r['price']:.0f}" if r["price"] else "FAILED"
+        status_label = f"€{r['price']:.0f}" if r["price"] else r["status"]
         mine = " ★" if r["is_mine"] else ""
-        print(f"  {r['name']}{mine}: {status}")
+        print(f"  {r['name']}{mine}: {status_label}")
 
     print("\nSaving to Supabase...")
     save_results(results)
