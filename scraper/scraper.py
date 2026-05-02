@@ -109,31 +109,39 @@ USER_AGENTS = [
 
 # --- Webshare API Support ---
 def get_webshare_proxy():
-    """Fetch a specific proxy from the Webshare proxy list."""
+    """Fetch a random proxy from the Webshare proxy list."""
     api_key = os.environ.get("WEBSHARE_API_KEY")
     if not api_key:
         return os.environ.get("PROXY_URL")
     
+    api_key = api_key.strip()
     try:
         import urllib.request
         import json
-        # Fetch the first proxy from your list
+        import random
+        # Fetch up to 50 proxies from your list
         req = urllib.request.Request(
-            "https://proxy.webshare.io/api/v2/proxy/list/?page=1&page_size=1",
+            "https://proxy.webshare.io/api/v2/proxy/list/?page=1&page_size=50",
             headers={"Authorization": f"Token {api_key}"}
         )
         with urllib.request.urlopen(req, timeout=10) as response:
             data = json.loads(response.read().decode())
-            if data["results"]:
-                proxy = data["results"][0]
+            if data.get("results"):
+                # Pick a random proxy so retries use different IPs
+                proxy = random.choice(data["results"])
                 user = proxy["username"]
                 pw = proxy["password"]
                 addr = proxy["proxy_address"]
                 port = proxy["port"]
+                print(f"  [Proxy Check] Successfully fetched direct proxy: {addr}:{port}")
                 return f"http://{user}:{pw}@{addr}:{port}"
             return os.environ.get("PROXY_URL")
     except Exception as e:
-        print(f"  [!] Failed to fetch Webshare proxy list: {e}")
+        import urllib.error
+        if isinstance(e, urllib.error.HTTPError):
+            print(f"  [!] Failed to fetch Webshare proxy list: {e.code} - {e.read().decode()}")
+        else:
+            print(f"  [!] Failed to fetch Webshare proxy list: {e}")
         return os.environ.get("PROXY_URL")
 
 
