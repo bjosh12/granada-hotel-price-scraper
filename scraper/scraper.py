@@ -166,14 +166,11 @@ async def scrape_all_hotels(checkin: datetime) -> list[dict]:
     results = []
     
     async with async_playwright() as p:
-        browser = await p.chromium.launch(
-            headless=True,
-            args=[
-                "--no-sandbox",
-                "--disable-setuid-sandbox",
-                "--disable-blink-features=AutomationControlled",
-            ],
-        )
+        proxy_url = os.environ.get("PROXY_URL")
+browser = await playwright.chromium.launch(
+    headless=True,
+    proxy={"server": proxy_url} if proxy_url else None
+)
         
         for hotel in HOTELS:
             print(f"  Scraping: {hotel['name']}...")
