@@ -1,0 +1,78 @@
+name: Hotel Price Scraper
+
+on:
+  schedule:
+    # Daily runs: 8AM, 12PM, 4PM, 8PM Madrid time (UTC+2 in summer / UTC+1 in winter)
+    # These are UTC times — adjust by -1hr in winter (CET) or -2hrs in summer (CEST)
+    - cron: "0 6 * * *"    # 8AM CEST (summer)
+    - cron: "0 10 * * *"   # 12PM CEST
+    - cron: "0 14 * * *"   # 4PM CEST
+    - cron: "0 18 * * *"   # 8PM CEST
+
+    # Weekly preview: every Sunday at 7AM CEST (preview next weekend's prices)
+    - cron: "0 5 * * 0"
+
+  # Allow manual trigger from GitHub Actions UI (useful for testing)
+  workflow_dispatch:
+    inputs:
+      run_mode:
+        description: "Run mode (daily or weekly)"
+        required: false
+        default: "daily"
+        type: choice
+        options:
+          - daily
+          - weekly
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          playwright install chromium --with-deps
+
+      - name: Determine run mode
+        id: mode
+        run: |
+          # Sunday 5AM UTC = weekly preview; everything else = daily
+          DAY=$(date -u +%u)   # 1=Mon .. 7=Sun
+          HOUR=$(date -u +%H)
+          if [ "$DAY" = "7" ] && [ "$HOUR" = "05" ]; then
+            echo "mode=weekly" >> $GITHUB_OUTPUT
+          elif [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "mode=${{ inputs.run_mode }}" >> $GITHUB_OUTPUT
+          else
+            echo "mode=daily" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Run scraper
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          FROM_EMAIL: ${{ secrets.FROM_EMAIL }}
+          EMAIL_1: ${{ secrets.EMAIL_1 }}
+          ALERT_EMAIL: ${{ secrets.ALERT_EMAIL }}
+          RUN_MODE: ${{ steps.mode.outputs.mode }}
+        run: python scraper/scraper.py
+
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: scraper-logs-${{ github.run_id }}
+          path: "*.log"
+          retention-days: 7
