@@ -214,6 +214,19 @@ async def scrape_all_hotels(checkin: datetime) -> list[dict]:
             headless=True,
             proxy={"server": proxy_url} if proxy_url else None
         )
+
+        # --- Proxy Check (Debug) ---
+        test_context = await browser.new_context()
+        test_page = await test_context.new_page()
+        try:
+            await test_page.goto("https://api.ipify.org?format=json", timeout=10000)
+            ip_data = await test_page.inner_text("body")
+            print(f"  [Proxy Check] Outgoing IP: {ip_data}")
+        except Exception as e:
+            print(f"  [Proxy Check] Could not verify IP: {e}")
+        finally:
+            await test_context.close()
+        # ---------------------------
         
         for hotel in HOTELS:
             print(f"  Scraping: {hotel['name']}...")
