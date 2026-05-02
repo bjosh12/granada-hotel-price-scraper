@@ -162,81 +162,87 @@ def build_booking_url(base_url: str, checkin: datetime) -> str:
 async def scrape_price(page, hotel: dict, checkin: datetime) -> dict:
     """Scrape price and return a status dict with room name."""
     url = build_booking_url(hotel["booking_url"], checkin)
-    
-    try:
-        await page.goto(url, wait_until="domcontentloaded", timeout=20000)
-        
-        # Wait for price OR availability messages
-        try:
-            await page.wait_for_selector(
-                '[data-testid="price-and-discounted-price"], .prco-valign-middle-helper, [data-testid="availability-messages-container"], .hp_no_availability_msg, .availability-advisory', 
-                timeout=12000
-            )
-        except PlaywrightTimeout:
-            return {"price": None, "status": "TIMEOUT", "room": None}
 
-        # Check for Sold Out or Minimum Stay messages
-        avail_msg_selectors = [
-            '[data-testid="availability-messages-container"]',
-            '.hp_no_availability_msg',
-            '.availability-advisory',
-            '.bui-alert--error'
-        ]
-        
-        for selector in avail_msg_selectors:
+    try:
+        await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+        await page.wait_for_timeout(3000)
+
+        # Accept cookie consent if present
+        try:
+            accept = await page.query_selector("button#onetrust-accept-btn-handler")
+            if accept:
+                await accept.click()
+                await page.wait_for_timeout(1000)
+        except Exception:
+            pass
+
+        # Click the prices/availability tab if present
+        tabs = await page.query_selector_all("a")
+        for tab in tabs:
+            try:
+                text = (await tab.inner_text()).strip().lower()
+                if text in ["prices", "info & prices", "availability"]:
+                    await tab.click()
+                    await page.wait_for_timeout(2000)
+                    break
+            except Exception:
+                pass
+
+        # Scroll to trigger lazy-loaded room table
+        await page.evaluate("window.scrollBy(0, 1500)")
+        await page.wait_for_timeout(1000)
+
+        # Check for sold out / no availability
+        for selector in ['[data-testid="availability-messages-container"]', '.hp_no_availability_msg', '.availability-advisory', '.bui-alert--error']:
             el = await page.query_selector(selector)
             if el:
                 text = (await el.inner_text()).lower()
                 if "no availability" in text or "sold out" in text or "not available" in text:
                     return {"price": None, "status": "SOLD_OUT", "room": "Sold out"}
-                if "minimum stay" in text or "stay" in text and "nights" in text:
+                if "minimum stay" in text or ("stay" in text and "nights" in text):
                     return {"price": None, "status": "MIN_STAY", "room": "Min stay required"}
 
-        # Find all room/price combinations
-        # We try both the classic table and the modern grid layout
+        # Extract room/price pairs — try proven selectors first, then modern layout
         all_rooms = []
-        
-        # Modern Layout
-        blocks = await page.query_selector_all('[data-testid="recommended-units"], .hprt-table tr:not(.hprt-cheapest-block-row)')
-        for block in blocks:
-            # Try to find room name and price within the same block
-            room_el = await block.query_selector('[data-testid="room-name"], .hprt-roomtype-icon-link')
-            price_el = await block.query_selector('[data-testid="price-and-discounted-price"], .bui-price-display__value, .prco-valign-middle-helper')
-            
+
+        rows = await page.query_selector_all("tr.js-rt-block-row, .hprt-table tr")
+        for row in rows:
+            room_el = await row.query_selector(".hprt-roomtype-icon-link")
+            price_el = await row.query_selector(".bui-price-display__value, .prco-valign-middle-helper")
             if room_el and price_el:
                 room_text = (await room_el.inner_text()).strip()
                 price_text = (await price_el.inner_text()).strip()
-                
-                # Extract numeric value
-                clean = price_text.replace("€", "").replace(",", "").replace("\xa0", "").replace(" ", "").strip()
-                nums = re.findall(r'\d+', clean)
+                nums = re.findall(r'\d+', price_text.replace('.', '').replace(',', ''))
                 if nums:
                     val = float(nums[-1])
                     if 10 < val < 10000:
                         all_rooms.append({"room": room_text, "price": val})
 
+        # Fall back to modern data-testid layout if classic table empty
         if not all_rooms:
-            # Fallback to simple price search if grouping failed
-            price_elements = await page.query_selector_all('[data-testid="price-and-discounted-price"], .prco-valign-middle-helper')
-            if price_elements:
-                text = await price_elements[0].inner_text()
-                nums = re.findall(r'\d+', text.replace("€", "").replace(",", "").replace(" ", ""))
-                if nums:
-                    return {"price": float(nums[-1]), "status": "SUCCESS", "room": "Standard Room"}
+            blocks = await page.query_selector_all('[data-testid="recommended-units"]')
+            for block in blocks:
+                room_el = await block.query_selector('[data-testid="room-name"]')
+                price_el = await block.query_selector('[data-testid="price-and-discounted-price"]')
+                if room_el and price_el:
+                    room_text = (await room_el.inner_text()).strip()
+                    price_text = (await price_el.inner_text()).strip()
+                    clean = price_text.replace("€", "").replace(",", "").replace("\xa0", "").replace(" ", "")
+                    nums = re.findall(r'\d+', clean)
+                    if nums:
+                        val = float(nums[-1])
+                        if 10 < val < 10000:
+                            all_rooms.append({"room": room_text, "price": val})
+
+        if not all_rooms:
             return {"price": None, "status": "NO_PRICE_FOUND", "room": None}
 
-        # Filter for doubles (logic from old scraper)
         doubles = [r for r in all_rooms
                    if any(k in r['room'].lower() for k in DOUBLE_KW)
                    and not any(k in r['room'].lower() for k in EXCLUDE_KW)]
 
-        if doubles:
-            cheapest = min(doubles, key=lambda x: x['price'])
-            return {"price": cheapest["price"], "status": "SUCCESS", "room": cheapest["room"]}
-        else:
-            # Fallback to absolute cheapest if no specific "double" room keywords found
-            cheapest = min(all_rooms, key=lambda x: x['price'])
-            return {"price": cheapest["price"], "status": "SUCCESS", "room": cheapest["room"]}
+        cheapest = min(doubles if doubles else all_rooms, key=lambda x: x['price'])
+        return {"price": cheapest["price"], "status": "SUCCESS", "room": cheapest["room"]}
 
     except Exception as e:
         print(f"  [!] Error scraping {hotel['name']}: {e}")
@@ -257,38 +263,34 @@ async def scrape_all_hotels(checkin: datetime) -> list[dict]:
             proxy={"server": proxy_url} if proxy_url else None
         )
 
+        # Single shared context so cookies/session accumulate across hotels,
+        # making the traffic pattern look like one user browsing hotel to hotel.
+        context = await browser.new_context(
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            viewport={"width": 1280, "height": 900},
+            locale="en-US",
+            timezone_id="Europe/Madrid",
+        )
+        await context.add_init_script(
+            "Object.defineProperty(navigator, 'webdriver', { get: () => undefined });"
+        )
+        page = await context.new_page()
+
         for hotel in HOTELS:
             print(f"  Scraping: {hotel['name']}...")
-            
+
             scraping_result = {"price": None, "status": "FAILED", "room": None}
-            
+
             for attempt in range(RETRIES_PER_HOTEL):
                 if attempt > 0:
                     print(f"    [retry] Attempt {attempt + 1} for {hotel['name']}...")
+                    await asyncio.sleep(random.uniform(3, 5))
 
-                context = await browser.new_context(
-                    user_agent=random.choice(USER_AGENTS),
-                    viewport={"width": 1366, "height": 768},
-                    locale="en-GB",
-                    timezone_id="Europe/Madrid",
-                )
-                
-                # Mask automation fingerprints
-                await context.add_init_script("""
-                    Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-                """)
-                
-                page = await context.new_page()
                 scraping_result = await scrape_price(page, hotel, checkin)
-                await context.close()
 
-                # If successful or a valid business status (sold out/min stay), stop retrying
                 if scraping_result["status"] in ["SUCCESS", "SOLD_OUT", "MIN_STAY"]:
                     break
-                
-                # If we failed, wait a bit before retrying
-                await asyncio.sleep(random.uniform(2, 4))
-            
+
             results.append({
                 "hotel_id": hotel["id"],
                 "name": hotel["name"],
@@ -300,10 +302,10 @@ async def scrape_all_hotels(checkin: datetime) -> list[dict]:
                 "checkin_date": checkin.strftime("%Y-%m-%d"),
                 "run_mode": RUN_MODE,
             })
-            
-            # Polite delay between hotels
-            await asyncio.sleep(random.uniform(4, 8))
-        
+
+            await asyncio.sleep(random.uniform(2, 4))
+
+        await context.close()
         await browser.close()
     
     return results
