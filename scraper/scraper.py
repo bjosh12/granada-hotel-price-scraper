@@ -353,7 +353,7 @@ def build_html_email(results: list[dict], checkin: datetime) -> str:
     MADRID_TZ = timezone(timedelta(hours=2))
     now_madrid = datetime.now(MADRID_TZ)
     timestamp = now_madrid.strftime("%H:%M")
-    checkin_str = checkin.strftime("%A, %d %B %Y")
+    checkin_str = checkin.strftime("%A, %d %b %Y")
 
     my_results = [r for r in results if r["is_mine"]]
     competitor_results = [r for r in results if not r["is_mine"]]
@@ -363,141 +363,110 @@ def build_html_email(results: list[dict], checkin: datetime) -> str:
     max_price = max(competitor_prices) if competitor_prices else None
     mode_label = "Weekly Preview" if RUN_MODE == "weekly" else "Daily Report"
 
-    def vs_badge(price):
+    NAVY = "#1a3c5e"
+
+    def vs_inline(price):
         if price is None or not competitor_prices:
             return ""
         diff = price - statistics.median(competitor_prices)
         if diff > 5:
-            bg, color = "#fee2e2", "#b91c1c"
-            label = f"+€{diff:.0f} vs market"
+            color, label = "#c0392b", f"+€{diff:.0f} vs median"
         elif diff < -5:
-            bg, color = "#dcfce7", "#15803d"
-            label = f"−€{abs(diff):.0f} vs market"
+            color, label = "#27ae60", f"−€{abs(diff):.0f} vs median"
         else:
-            bg, color = "#fef9c3", "#a16207"
-            label = f"≈ market"
-        return f'<span style="display:inline-block;background:{bg};color:{color};font-size:11px;font-weight:700;padding:2px 9px;border-radius:20px;margin-left:8px;vertical-align:middle">{label}</span>'
+            color, label = "#e67e22", "≈ median"
+        return f'<span style="font-size:12px;color:{color};font-weight:600;margin-left:10px;white-space:nowrap">{label}</span>'
 
-    def price_display(row, large=False):
-        size = "22px" if large else "16px"
-        weight = "800" if large else "700"
+    def status_cell(row):
         if row["price"] is not None:
-            return f'<span style="font-size:{size};font-weight:{weight};color:#0f172a">€{row["price"]:.0f}</span>'
-        status_map = {
-            "SOLD_OUT":      ("#fee2e2", "#b91c1c", "Sold Out"),
-            "MIN_STAY":      ("#e0f2fe", "#0369a1", "Min Stay"),
-            "TIMEOUT":       ("#f1f5f9", "#64748b", "Unavailable"),
-            "NO_PRICE_FOUND":("#f1f5f9", "#64748b", "Unavailable"),
-        }
-        bg, color, label = status_map.get(row["status"], ("#f1f5f9", "#94a3b8", "N/A"))
-        return f'<span style="display:inline-block;background:{bg};color:{color};font-size:11px;font-weight:700;padding:3px 10px;border-radius:6px;text-transform:uppercase;letter-spacing:0.5px">{label}</span>'
+            return f'<td style="padding:12px 16px;text-align:right;white-space:nowrap;font-size:15px;font-weight:700;color:{NAVY}">€{row["price"]:.0f}</td>'
+        labels = {"SOLD_OUT": "Sold out", "MIN_STAY": "Min stay"}
+        label = labels.get(row["status"], "Unavailable")
+        return f'<td style="padding:12px 16px;text-align:right;white-space:nowrap;font-size:13px;color:#aaa;font-style:italic">{label}</td>'
 
-    # Your properties — card style
-    my_cards = ""
+    def room_cell(row):
+        room = row.get("room_name") or ""
+        no_double = room and not any(k in room.lower() for k in DOUBLE_KW)
+        nd = '<br><span style="font-size:11px;color:#aaa;font-style:italic">No double available</span>' if no_double else ""
+        return f'<td style="padding:12px 16px;font-size:13px;color:#666">{room}{nd}</td>'
+
+    # Your properties rows (3 columns: name+badge | room | price)
+    my_rows = ""
     for r in my_results:
-        room = f'<div style="font-size:12px;color:#64748b;margin-top:3px">{r["room_name"]}</div>' if r.get("room_name") else ""
-        badge = vs_badge(r["price"])
-        my_cards += f"""
-        <tr><td style="padding:6px 28px">
-          <table width="100%" cellpadding="0" cellspacing="0" style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px">
-            <tr>
-              <td style="padding:14px 18px">
-                <div style="font-size:15px;font-weight:700;color:#0f172a">{r['name']}{badge}</div>
-                {room}
-              </td>
-              <td style="padding:14px 18px;text-align:right;white-space:nowrap">
-                {price_display(r, large=True)}
-              </td>
-            </tr>
-          </table>
-        </td></tr>"""
-
-    # Competitors — clean ranked list
-    comp_rows = ""
-    for i, r in enumerate(sorted(competitor_results, key=lambda x: x["price"] or 9999)):
-        room = f'<div style="font-size:11px;color:#94a3b8;margin-top:2px">{r["room_name"]}</div>' if r.get("room_name") else ""
-        bg = "#ffffff" if i % 2 == 0 else "#f8fafc"
-        comp_rows += f"""
-        <tr style="background:{bg}">
-          <td style="padding:11px 28px;border-bottom:1px solid #f1f5f9">
-            <div style="font-size:14px;font-weight:500;color:#1e293b">{r['name']}</div>
-            {room}
-          </td>
-          <td style="padding:11px 28px;border-bottom:1px solid #f1f5f9;text-align:right;white-space:nowrap">
-            {price_display(r)}
-          </td>
+        badge = vs_inline(r["price"])
+        my_rows += f"""
+        <tr style="background:#eaf3fb;border-left:3px solid {NAVY}">
+          <td style="padding:12px 16px;font-size:14px;font-weight:700;color:{NAVY}">{r['name']}{badge}</td>
+          {room_cell(r)}
+          {status_cell(r)}
         </tr>"""
 
-    # Market summary bar
+    # Competitor rows (3 columns: name | room | price)
+    comp_rows = ""
+    for r in sorted(competitor_results, key=lambda x: x["price"] or 9999):
+        comp_rows += f"""
+        <tr style="border-bottom:1px solid #f0f0f0">
+          <td style="padding:12px 16px;font-size:14px;color:#333">{r['name']}</td>
+          {room_cell(r)}
+          {status_cell(r)}
+        </tr>"""
+
+    # Market summary footer
     if median_price is not None:
         range_str = f"€{min_price:.0f} – €{max_price:.0f}" if min_price != max_price else f"€{median_price:.0f}"
-        market_bar = f"""
-        <tr><td colspan="2" style="padding:0 28px 20px">
-          <table width="100%" cellpadding="0" cellspacing="0" style="background:#0f172a;border-radius:10px">
-            <tr>
-              <td style="padding:14px 18px">
-                <div style="font-size:10px;font-weight:700;letter-spacing:1.2px;text-transform:uppercase;color:#475569">Market Range</div>
-                <div style="font-size:18px;font-weight:800;color:#f1f5f9;margin-top:4px">{range_str}</div>
-              </td>
-              <td style="padding:14px 18px;text-align:right;border-left:1px solid #1e293b">
-                <div style="font-size:10px;font-weight:700;letter-spacing:1.2px;text-transform:uppercase;color:#475569">Median</div>
-                <div style="font-size:18px;font-weight:800;color:#f1f5f9;margin-top:4px">€{median_price:.0f}</div>
-              </td>
-            </tr>
-          </table>
-        </td></tr>"""
+        market_bar = f'<tr><td colspan="3" style="padding:12px 16px;font-size:12px;color:#666;background:#f8f8f8;border-top:1px solid #eee">Competitor range: <strong>{range_str}</strong> &nbsp;·&nbsp; Median: <strong>€{median_price:.0f}</strong></td></tr>'
     else:
         market_bar = ""
 
     scrape_errors = [r["name"] for r in results if r["status"] in ("ERROR", "TIMEOUT", "FAILED", "NO_PRICE_FOUND")]
-    error_row = ""
+    error_section = ""
     if scrape_errors:
-        error_row = f"""
-        <tr><td colspan="2" style="padding:0 28px 16px">
-          <div style="font-size:12px;color:#b91c1c;background:#fee2e2;border-radius:8px;padding:10px 14px">
-            ⚠️ Scrape errors (check logs): {", ".join(scrape_errors)}
-          </div>
-        </td></tr>"""
+        error_section = f'<p style="font-size:12px;color:#c0392b;margin:12px 0 0">⚠️ Scrape errors (check logs): {", ".join(scrape_errors)}</p>'
 
     return f"""<!DOCTYPE html>
 <html>
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
-<body style="margin:0;padding:0;background:#f1f5f9;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">
-<table width="100%" cellpadding="0" cellspacing="0"><tr><td align="center" style="padding:24px 16px">
-<table width="580" cellpadding="0" cellspacing="0" style="max-width:580px;width:100%;background:#ffffff;border-radius:16px;overflow:hidden;box-shadow:0 4px 24px rgba(0,0,0,0.08)">
+<body style="margin:0;padding:0;background:#f4f6f9;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif">
+<table width="100%" cellpadding="0" cellspacing="0"><tr><td align="center" style="padding:24px 12px">
+<table width="600" cellpadding="0" cellspacing="0" style="max-width:600px;width:100%;background:#fff;border-radius:8px;overflow:hidden;box-shadow:0 2px 12px rgba(0,0,0,0.08)">
 
   <!-- Header -->
-  <tr><td style="background:#0f172a;padding:28px 28px 24px">
-    <div style="font-size:11px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;color:#475569">{mode_label}</div>
-    <div style="font-size:28px;font-weight:800;color:#f8fafc;margin-top:6px;letter-spacing:-0.5px">Granada Rates</div>
-    <div style="font-size:14px;color:#94a3b8;margin-top:6px">{checkin_str} &nbsp;·&nbsp; Generated {timestamp}</div>
+  <tr><td style="background:{NAVY};padding:24px 20px">
+    <div style="font-size:11px;letter-spacing:1px;text-transform:uppercase;color:#7fa8c9;font-weight:600">{mode_label}</div>
+    <div style="font-size:22px;font-weight:700;color:#ffffff;margin-top:6px">Granada Rates</div>
+    <div style="font-size:13px;color:#a8c4d8;margin-top:5px">{checkin_str} &nbsp;·&nbsp; Scraped at {timestamp}</div>
   </td></tr>
 
-  <!-- Your Properties label -->
-  <tr><td style="padding:20px 28px 10px">
-    <div style="font-size:10px;font-weight:800;letter-spacing:1.5px;text-transform:uppercase;color:#94a3b8">Your Properties</div>
+  <!-- Your Properties -->
+  <tr><td style="padding:16px 16px 6px">
+    <div style="font-size:10px;font-weight:700;letter-spacing:1.2px;text-transform:uppercase;color:#999">Your Properties</div>
+  </td></tr>
+  <tr><td style="padding:0 16px 16px">
+    <table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;border:1px solid #d6e8f5;border-radius:6px;overflow:hidden">
+      {my_rows}
+    </table>
   </td></tr>
 
-  <!-- Your property cards -->
-  <table width="100%" cellpadding="0" cellspacing="0">{my_cards}</table>
-
-  <!-- Competitors label -->
-  <tr><td style="padding:20px 28px 10px;border-top:1px solid #f1f5f9;margin-top:8px">
-    <div style="font-size:10px;font-weight:800;letter-spacing:1.5px;text-transform:uppercase;color:#94a3b8">Competitors</div>
+  <!-- Competitors -->
+  <tr><td style="padding:8px 16px 6px;border-top:1px solid #eee">
+    <div style="font-size:10px;font-weight:700;letter-spacing:1.2px;text-transform:uppercase;color:#999">Competitors</div>
   </td></tr>
-
-  <!-- Competitor rows -->
-  <table width="100%" cellpadding="0" cellspacing="0">{comp_rows}</table>
-
-  <!-- Market summary + errors -->
-  <table width="100%" cellpadding="0" cellspacing="0" style="margin-top:16px">
-    {market_bar}
-    {error_row}
-  </table>
+  <tr><td style="padding:0 16px 16px">
+    <table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse">
+      <tr style="background:#f5f5f5">
+        <th style="padding:8px 16px;text-align:left;font-size:10px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:#aaa">Hotel</th>
+        <th style="padding:8px 16px;text-align:left;font-size:10px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:#aaa">Room Type</th>
+        <th style="padding:8px 16px;text-align:right;font-size:10px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:#aaa">Rate</th>
+      </tr>
+      {comp_rows}
+      {market_bar}
+    </table>
+    {error_section}
+  </td></tr>
 
   <!-- Footer -->
-  <tr><td style="padding:16px 28px;border-top:1px solid #f1f5f9">
-    <div style="font-size:11px;color:#cbd5e1">Hotel Price Monitor · Booking.com · Cheapest double room incl. taxes</div>
+  <tr><td style="padding:12px 16px;border-top:1px solid #eee;font-size:11px;color:#bbb">
+    Cheapest double room · Booking.com · Prices include taxes &amp; fees
   </td></tr>
 
 </table>
