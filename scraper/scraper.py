@@ -39,7 +39,7 @@ RUN_MODE = os.environ.get("RUN_MODE", "daily")
 def get_checkin_date() -> datetime:
     if RUN_MODE == "weekly":
         return datetime.now() + timedelta(days=7)
-    return datetime.now() + timedelta(days=1)
+    return datetime.now()
 
 # ─── Hotel definitions ────────────────────────────────────────────────────────
 
