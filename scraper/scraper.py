@@ -532,9 +532,10 @@ async def main():
     results = await scrape_all_hotels(checkin)
 
     successes = [r for r in results if r["price"] is not None]
-    failures = [r for r in results if r["price"] is None]
+    sold_out  = [r for r in results if r["status"] in ("SOLD_OUT", "MIN_STAY")]
+    errors    = [r for r in results if r["status"] in ("ERROR", "TIMEOUT", "FAILED", "NO_PRICE_FOUND")]
 
-    print(f"\nResults: {len(successes)} succeeded, {len(failures)} failed")
+    print(f"\nResults: {len(successes)} with price, {len(sold_out)} sold out, {len(errors)} errors")
     for r in results:
         status_label = f"€{r['price']:.0f}" if r["price"] else r["status"]
         mine = " ★" if r["is_mine"] else ""
@@ -552,10 +553,10 @@ async def main():
         return
 
     print("Sending email...")
-    if len(successes) > 0:
+    if len(successes) + len(sold_out) > 0:
         send_report(results, checkin)
-    
-    if len(failures) >= ERROR_THRESHOLD:
+
+    if len(errors) >= ERROR_THRESHOLD:
         send_error_alert(results, checkin)
 
     print("\nDone.")
