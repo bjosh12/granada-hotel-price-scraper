@@ -59,6 +59,12 @@ HOTELS = [
         "booking_url": "https://www.booking.com/hotel/es/vivienda-turistica-vacacional-abadia.html",
         "is_mine": True,
     },
+    {
+        "id": "ab_pension_granada",
+        "name": "AB Pension Granada",
+        "booking_url": "https://www.booking.com/hotel/es/pension-ab-granada.html",
+        "is_mine": True,
+    },
     # ── Competitors ──────────────────────────────────────────────────────────
     {
         "id": "competitor_1",
