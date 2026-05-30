@@ -64,6 +64,7 @@ HOTELS = [
         "name": "AB Pension Granada",
         "booking_url": "https://www.booking.com/hotel/es/pension-ab-granada.html",
         "is_mine": True,
+        "prefer_room_kw": ["shared bathroom"],
     },
     # ── Competitors ──────────────────────────────────────────────────────────
     {
@@ -245,11 +246,16 @@ async def scrape_price(page, hotel: dict, checkin: datetime) -> dict:
         if not all_rooms:
             return {"price": None, "status": "NO_PRICE_FOUND", "room": None}
 
-        doubles = [r for r in all_rooms
-                   if any(k in r['room'].lower() for k in DOUBLE_KW)
-                   and not any(k in r['room'].lower() for k in EXCLUDE_KW)]
+        prefer_kw = hotel.get("prefer_room_kw", [])
+        preferred = [r for r in all_rooms if any(k in r['room'].lower() for k in prefer_kw)] if prefer_kw else []
 
-        cheapest = min(doubles if doubles else all_rooms, key=lambda x: x['price'])
+        if preferred:
+            cheapest = min(preferred, key=lambda x: x['price'])
+        else:
+            doubles = [r for r in all_rooms
+                       if any(k in r['room'].lower() for k in DOUBLE_KW)
+                       and not any(k in r['room'].lower() for k in EXCLUDE_KW)]
+            cheapest = min(doubles if doubles else all_rooms, key=lambda x: x['price'])
         return {"price": cheapest["price"], "status": "SUCCESS", "room": cheapest["room"]}
 
     except Exception as e:
