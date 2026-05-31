@@ -202,14 +202,17 @@ async def scrape_price(page, hotel: dict, checkin: datetime) -> dict:
         await page.wait_for_timeout(1000)
 
         # Check for sold out / no availability
+        # Skip the early MIN_STAY bail-out for hotels with prefer_room_kw — the banner
+        # may only apply to some room types; let room extraction decide.
         for selector in ['[data-testid="availability-messages-container"]', '.hp_no_availability_msg', '.availability-advisory', '.bui-alert--error']:
             el = await page.query_selector(selector)
             if el:
                 text = (await el.inner_text()).lower()
                 if "no availability" in text or "sold out" in text or "not available" in text:
                     return {"price": None, "status": "SOLD_OUT", "room": "Sold out"}
-                if "minimum stay" in text or ("stay" in text and "nights" in text):
-                    return {"price": None, "status": "MIN_STAY", "room": "Min stay required"}
+                if not hotel.get("prefer_room_kw"):
+                    if "minimum stay" in text or ("stay" in text and "nights" in text):
+                        return {"price": None, "status": "MIN_STAY", "room": "Min stay required"}
 
         # Extract room/price pairs — try proven selectors first, then modern layout
         all_rooms = []
